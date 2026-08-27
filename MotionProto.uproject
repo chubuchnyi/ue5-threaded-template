@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.7",
+	"Category": "",
+	"Description": "MotionLink prototype: UE physics -> worker thread -> UDP -> controller_sim",
+	"Modules": [
+		{
+			"Name": "MotionProto",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "MotionLink",
+			"Enabled": true
+		}
+	]
+}

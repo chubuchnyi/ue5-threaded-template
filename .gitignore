@@ -24,3 +24,6 @@ tools/controller_sim/build/
 *.obj
 *.o
 run*.csv
+
+# build/run logs
+*.log

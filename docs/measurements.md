@@ -45,3 +45,30 @@ lag (e.g. in0 = 0.1985 → out0 = 0.1993 near a peak).
 RTT (from `motion_gen`): p50 ≈ 1010 µs. _(estimate — dominated by the stub's
 1 ms echo-polling interval, not true pipeline latency. Real RTT is measured
 UE-side in later stages.)_
+
+## Stage 2 — UE plugin skeleton
+
+Build: `MotionProtoEditor Win64 Development` via UBT, MSVC 14.44. Both modules
+compile and link clean (`UnrealEditor-MotionProto.dll`,
+`UnrealEditor-MotionLink.dll`). Run: `UnrealEditor-Cmd MotionProto.uproject
+-game -nullrhi -unattended`, worker feeding `controller_sim` on loopback.
+
+Result — **stable 1 kHz from UE**:
+
+- Receive rate at the controller: **999–1001 frames/s**, sustained over 10 s.
+- Loss: **0.000%**, crc_fail 0, reorder 0.
+- Send-interval jitter (measured at the controller): **p50 = 1000 µs,
+  p99 ≈ 1505 µs, max 2000–4074 µs**. The p99/max tail is untuned-desktop
+  scheduler noise (core parking / C-states still on — Stage 5 tuning).
+- UE's synthetic sine arrives intact: surge amplitude 0.200 m, period 2.0 s
+  (0.5 Hz) — matches the `motion.Sine.*` CVar defaults exactly.
+
+### Bug found by measurement: timer quantized to ~2 ms
+
+First run clocked **~530 frames/s** (p50 ≈ 1500–2000 µs), not 1 kHz. Cause: a
+periodic `SetWaitableTimer` (lPeriod = 1) still rides the process timer
+resolution, and the worker never raised it. Fix: `timeBeginPeriod(1)` plus
+re-arming the high-resolution waitable timer as a one-shot against an advancing
+absolute deadline each iteration (self-corrects drift). After the fix: solid
+1000 Hz as above. This is exactly the "measure, don't assume" point of the
+prototype.
