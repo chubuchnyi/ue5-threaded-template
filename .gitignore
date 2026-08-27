@@ -1,0 +1,26 @@
+# UE generated
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+*.VC.db
+*.opensdf
+*.sdf
+*.suo
+.vs/
+
+# UE project files (regenerated from .uproject)
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# controller_sim / CMake build output
+build/
+tools/controller_sim/build/
+
+# scratch
+*.exe
+*.obj
+*.o
+run*.csv
