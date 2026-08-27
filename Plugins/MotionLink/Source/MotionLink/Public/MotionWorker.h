@@ -83,6 +83,13 @@ private:
 	bool   HaveMeas = false;
 	int    CorrTicks = 0;
 
+	// --- Stage 4: washout filters + rate/jerk limiter state (per channel) ---
+	double HpfPrevIn[MOTION_DOF]  = {0}; // high-pass (translations): previous input
+	double HpfPrevOut[MOTION_DOF] = {0}; // high-pass: previous output
+	double LpfPrev[MOTION_DOF]    = {0}; // low-pass (tilt): previous output
+	double LimPrevPose[MOTION_DOF] = {0}; // rate/jerk limiter: last emitted pose
+	double LimPrevVel[MOTION_DOF]  = {0}; // rate/jerk limiter: last emitted velocity
+
 	// Tick-interval histogram in microseconds, one bucket per us. Cleared each
 	// 1 s stats window. Preallocated; no allocation on the hot path.
 	static const int kHistBuckets = 4096; // clamps intervals to < ~4.1 ms

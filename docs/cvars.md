@@ -20,6 +20,13 @@ constants in code. This table is the source of truth; keep it in sync.
 | `motion.Test.Amp` | `0.3` | live | Test body drive amplitude, metres |
 | `motion.Test.Stiffness` | `60` | live | Servo spring stiffness driving the body to its sine target |
 | `motion.Test.Damping` | `16` | live | Servo damping |
+| `motion.Cue.Enabled` | `1` | live | Apply washout + limiter (1) or bypass to raw observer output (0) |
+| `motion.Cue.TransHighpassHz` | `0.2` | live | Translation washout high-pass cutoff, Hz |
+| `motion.Cue.RotLowpassHz` | `2.0` | live | Tilt-coordination low-pass cutoff, Hz |
+| `motion.Limit.Trans` | `0.5` | live | Workspace translation limit, metres |
+| `motion.Limit.Rot` | `0.35` | live | Workspace rotation limit, radians |
+| `motion.Limit.Vel` | `2.0` | live | Velocity limit, m/s or rad/s |
+| `motion.Limit.Jerk` | `100` | live | Jerk limit, (m|rad)/s² |
 
 **Scope:** `startup` values are read once when the subsystem initializes and
 handed to the worker; changing them at runtime has no effect until restart.

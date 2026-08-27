@@ -50,6 +50,29 @@ static TAutoConsoleVariable<int32> CVarCorrectMs(
 	TEXT("motion.Obs.CorrectMs"), 8,
 	TEXT("Observer residual-correction smear time, ms. Live."), ECVF_Default);
 
+// --- Stage 4: cueing skeleton + limiter ---
+static TAutoConsoleVariable<int32> CVarCueEnabled(
+	TEXT("motion.Cue.Enabled"), 1,
+	TEXT("1: apply washout + limiter; 0: bypass (raw observer output). Live."), ECVF_Default);
+static TAutoConsoleVariable<float> CVarTransHpf(
+	TEXT("motion.Cue.TransHighpassHz"), 0.2f,
+	TEXT("Translation washout high-pass cutoff, Hz. Live."), ECVF_Default);
+static TAutoConsoleVariable<float> CVarRotLpf(
+	TEXT("motion.Cue.RotLowpassHz"), 2.0f,
+	TEXT("Tilt-coordination low-pass cutoff, Hz. Live."), ECVF_Default);
+static TAutoConsoleVariable<float> CVarLimitTrans(
+	TEXT("motion.Limit.Trans"), 0.5f,
+	TEXT("Workspace translation limit, metres. Live."), ECVF_Default);
+static TAutoConsoleVariable<float> CVarLimitRot(
+	TEXT("motion.Limit.Rot"), 0.35f,
+	TEXT("Workspace rotation limit, radians. Live."), ECVF_Default);
+static TAutoConsoleVariable<float> CVarLimitVel(
+	TEXT("motion.Limit.Vel"), 2.0f,
+	TEXT("Velocity limit, m/s or rad/s. Live."), ECVF_Default);
+static TAutoConsoleVariable<float> CVarLimitJerk(
+	TEXT("motion.Limit.Jerk"), 100.0f,
+	TEXT("Jerk limit, (m|rad)/s^2. Live."), ECVF_Default);
+
 // Parse "a.b.c.d" into a host-order uint32. Returns loopback on failure.
 static uint32 ParseIpHostOrder(const FString& Ip)
 {
@@ -129,6 +152,14 @@ bool UMotionLinkSubsystem::Tick(float /*DeltaSeconds*/)
 	Controls.SourceMode.store((uint32)FMath::Max(0, CVarSource.GetValueOnGameThread()), std::memory_order_release);
 	Controls.CorrectMs.store((uint32)FMath::Max(1, CVarCorrectMs.GetValueOnGameThread()), std::memory_order_release);
 
+	Controls.CueEnabled.store(CVarCueEnabled.GetValueOnGameThread() != 0 ? 1u : 0u, std::memory_order_release);
+	Controls.TransHpfMilliHz.store((uint32)FMath::Max(0.0f, CVarTransHpf.GetValueOnGameThread() * 1000.0f), std::memory_order_release);
+	Controls.RotLpfMilliHz.store((uint32)FMath::Max(0.0f, CVarRotLpf.GetValueOnGameThread() * 1000.0f), std::memory_order_release);
+	Controls.LimitTransMicroM.store((uint32)FMath::Max(1.0f, CVarLimitTrans.GetValueOnGameThread() * 1e6f), std::memory_order_release);
+	Controls.LimitRotMicroRad.store((uint32)FMath::Max(1.0f, CVarLimitRot.GetValueOnGameThread() * 1e6f), std::memory_order_release);
+	Controls.LimitVelMicro.store((uint32)FMath::Max(1.0f, CVarLimitVel.GetValueOnGameThread() * 1e6f), std::memory_order_release);
+	Controls.LimitJerkMilli.store((uint32)FMath::Max(1.0f, CVarLimitJerk.GetValueOnGameThread() * 1e3f), std::memory_order_release);
+
 	// Read-only overlay.
 	if (CVarOverlay.GetValueOnGameThread() != 0 && GEngine)
 	{
@@ -142,15 +173,16 @@ bool UMotionLinkSubsystem::Tick(float /*DeltaSeconds*/)
 		const uint32 Depth = Telemetry.RingDepth.load(std::memory_order_acquire);
 		const uint32 AgeUs = Telemetry.SampleAgeUs.load(std::memory_order_acquire);
 		const uint32 Src   = Controls.SourceMode.load(std::memory_order_acquire);
+		const uint32 Lim   = Telemetry.LimiterActive.load(std::memory_order_acquire);
 
 		static const TCHAR* StateNames[] = { TEXT("INIT"), TEXT("ACTIVE"), TEXT("LIMITED"), TEXT("PARK"), TEXT("FAULT") };
 		const TCHAR* StateStr = StateNames[St <= MOTION_STATE_FAULT ? St : 0];
 
 		const FColor Color = (Hz >= 990 && Hz <= 1010) ? FColor::Green : FColor::Yellow;
 		const FString Line = FString::Printf(
-			TEXT("MotionLink  %4u Hz  jitter p99=%u us max=%u us  seq=%u  RTT=%u us  state=%s  src=%s ring=%u age=%u us  tx_err=%u"),
+			TEXT("MotionLink  %4u Hz  jitter p99=%u us max=%u us  seq=%u  RTT=%u us  state=%s  src=%s ring=%u age=%u us  lim=%s  tx_err=%u"),
 			Hz, P99, MaxUs, Seq, Rtt, StateStr,
-			Src == 0 ? TEXT("sine") : TEXT("obs"), Depth, AgeUs, Errs);
+			Src == 0 ? TEXT("sine") : TEXT("obs"), Depth, AgeUs, Lim ? TEXT("ON") : TEXT("off"), Errs);
 
 		// Stable key so the line updates in place instead of stacking.
 		GEngine->AddOnScreenDebugMessage(/*Key*/ 0x4D4C /*'ML'*/, 1.5f, Color, Line);

@@ -29,6 +29,7 @@ struct FMotionLinkTelemetry
 	std::atomic<uint32_t> SendErrors{0};   // cumulative sendto failures
 	std::atomic<uint32_t> RingDepth{0};    // telemetry ring occupancy (approx)
 	std::atomic<uint32_t> SampleAgeUs{0};  // age of last consumed sample, us
+	std::atomic<uint32_t> LimiterActive{0};// 1 if the limiter scaled this frame
 };
 
 // Game thread -> worker. Live-tunable inputs sourced from motion.* CVars and
@@ -41,4 +42,13 @@ struct FMotionLinkControls
 	std::atomic<uint32_t> SineAmpMicroM{200000}; // sine amplitude, um (0.2 m)
 	std::atomic<uint32_t> SourceMode{1};         // 0: synthetic sine, 1: telemetry observer
 	std::atomic<uint32_t> CorrectMs{8};          // residual correction smear, ms
+
+	// --- Stage 4: cueing skeleton + limiter (fixed-point, pushed live) ---
+	std::atomic<uint32_t> CueEnabled{1};         // 0: bypass cueing/limiter
+	std::atomic<uint32_t> TransHpfMilliHz{200};  // translation washout HPF cutoff, mHz
+	std::atomic<uint32_t> RotLpfMilliHz{2000};   // tilt-coordination LPF cutoff, mHz
+	std::atomic<uint32_t> LimitTransMicroM{500000};  // workspace translation limit, um
+	std::atomic<uint32_t> LimitRotMicroRad{350000};  // workspace rotation limit, urad
+	std::atomic<uint32_t> LimitVelMicro{2000000};    // velocity limit, u(m|rad)/s
+	std::atomic<uint32_t> LimitJerkMilli{100000};    // jerk limit, m(m|rad)/s^2
 };

@@ -106,3 +106,31 @@ Artificial FPS drop (`t.MaxFPS 20`) — the key criterion:
    50 ms frame → overshoot → divergence). This was the *stimulus*, not the
    pipeline. Fix: soften the servo (K = 60, critically damped) so it stays
    stable across frame rates.
+
+## Stage 4 — cueing skeleton + limiter
+
+The worker inserts, between the observer and the UDP send: washout (first-order
+HPF on translations, LPF on rotations) → workspace limiter (single vector
+scale) → velocity + jerk limit. All coefficients are live `motion.Cue.*` /
+`motion.Limit.*` CVars.
+
+Washout (default `motion.Cue.TransHighpassHz` = 0.2 Hz):
+
+- The cube's sustained ~1.0 m heave offset is high-passed away: output Z goes
+  from raw [0.955, 1.045] m to **[−0.045, 0.046] m** (centred on neutral),
+  while X/Y still oscillate ±0.25 m (0.5 Hz passes the 0.2 Hz HPF). This is the
+  washout returning the platform toward neutral.
+
+Limiter (single whole-vector scale, no per-component clamp):
+
+- Default limits (0.5 m, 2 m/s, 100 /s²): limiter active ~26% of ticks (the
+  velocity limit trimming the observer's per-tick correction spikes).
+- Tighten to `motion.Limit.Trans 0.1` **live from the console**: limiter engages
+  on **97%** of ticks and the output is capped — X ∈ [−0.103, 0.100],
+  Y ∈ [−0.101, 0.101] m (down from ±0.25). Both axes scale together, confirming
+  the deviation *vector* is scaled by one factor rather than clamped per axis.
+- `limiter_active` is carried in the setpoint flags and shows in the
+  `controller_sim` CSV `limiter` column and the on-screen overlay (`lim=ON`).
+
+Meets the done criterion: coefficients change from the console on the fly and
+the limiter's action is visible in the log.

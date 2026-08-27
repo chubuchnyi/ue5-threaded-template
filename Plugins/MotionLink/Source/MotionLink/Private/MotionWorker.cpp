@@ -254,6 +254,82 @@ uint32 FMotionWorker::Run()
 			Telemetry->RingDepth.store(Ring->ApproxDepth(), std::memory_order_release);
 		}
 
+		// --- Stage 4: cueing skeleton + limiter -------------------------------
+		// Order: washout (HPF translations / LPF tilt) -> workspace limiter
+		// (single vector scale) -> rate + jerk limit. All coefficients live.
+		bool limiterActive = false;
+		const bool cueEnabled = Controls->CueEnabled.load(std::memory_order_acquire) != 0;
+		if (cueEnabled)
+		{
+			const double kTwo = kTwoPi;
+			const double fcTrans = Controls->TransHpfMilliHz.load(std::memory_order_acquire) / 1000.0;
+			const double fcRot   = Controls->RotLpfMilliHz.load(std::memory_order_acquire) / 1000.0;
+			// Exact first-order discretizations at the actual tick dt.
+			const double aHpf   = std::exp(-kTwo * fcTrans * dtSec);       // pole, HPF
+			const double aLpf   = 1.0 - std::exp(-kTwo * fcRot * dtSec);   // gain, LPF
+
+			// Washout: translations (0..2) high-pass to bleed toward neutral;
+			// rotations (3..5) low-pass for tilt coordination.
+			for (int d = 0; d < 3; ++d)
+			{
+				const double x = outPose[d];
+				const double y = aHpf * (HpfPrevOut[d] + x - HpfPrevIn[d]);
+				HpfPrevIn[d] = x;
+				HpfPrevOut[d] = y;
+				outPose[d] = y;
+			}
+			for (int d = 3; d < MOTION_DOF; ++d)
+			{
+				LpfPrev[d] += aLpf * (outPose[d] - LpfPrev[d]);
+				outPose[d] = LpfPrev[d];
+			}
+
+			// Workspace limiter: scale the WHOLE deviation vector by one factor
+			// (no per-component clamp) when any channel exceeds its limit.
+			const double limTrans = Controls->LimitTransMicroM.load(std::memory_order_acquire) / 1e6;
+			const double limRot   = Controls->LimitRotMicroRad.load(std::memory_order_acquire) / 1e6;
+			double ratio = 0.0;
+			for (int d = 0; d < 3; ++d) { const double r = std::fabs(outPose[d]) / limTrans; if (r > ratio) ratio = r; }
+			for (int d = 3; d < MOTION_DOF; ++d) { const double r = std::fabs(outPose[d]) / limRot; if (r > ratio) ratio = r; }
+			if (ratio > 1.0)
+			{
+				const double s = 1.0 / ratio;
+				for (int d = 0; d < MOTION_DOF; ++d) outPose[d] *= s;
+				limiterActive = true;
+			}
+
+			// Rate (velocity) + jerk limit per channel.
+			const double vMax = Controls->LimitVelMicro.load(std::memory_order_acquire) / 1e6;
+			const double jMax = Controls->LimitJerkMilli.load(std::memory_order_acquire) / 1e3;
+			const double dMax  = vMax * dtSec;      // max |Δpose| this tick
+			const double dvMax = jMax * dtSec;      // max |Δvelocity| this tick
+			for (int d = 0; d < MOTION_DOF; ++d)
+			{
+				double delta = outPose[d] - LimPrevPose[d];
+				if (std::fabs(delta) > dMax) { delta = (delta < 0 ? -dMax : dMax); limiterActive = true; }
+				double appliedVel = delta / dtSec;
+				const double dv = appliedVel - LimPrevVel[d];
+				if (std::fabs(dv) > dvMax) { appliedVel = LimPrevVel[d] + (dv < 0 ? -dvMax : dvMax); delta = appliedVel * dtSec; limiterActive = true; }
+				const double newPose = LimPrevPose[d] + delta;
+				LimPrevPose[d] = newPose;
+				LimPrevVel[d]  = appliedVel;
+				outPose[d] = newPose;
+				outVel[d]  = appliedVel;
+			}
+		}
+		else
+		{
+			// Bypass: keep filter/limiter state synced to the raw output so
+			// re-enabling cueing doesn't produce a jump.
+			for (int d = 0; d < MOTION_DOF; ++d)
+			{
+				HpfPrevIn[d] = outPose[d]; HpfPrevOut[d] = 0.0;
+				LpfPrev[d] = outPose[d];
+				LimPrevPose[d] = outPose[d]; LimPrevVel[d] = outVel[d];
+			}
+		}
+		Telemetry->LimiterActive.store(limiterActive ? 1u : 0u, std::memory_order_release);
+
 		// --- emit one setpoint ---
 		if (enabled)
 		{
@@ -264,7 +340,7 @@ uint32 FMotionWorker::Run()
 			}
 			TxFrame.seq = SeqCounter++;
 			TxFrame.t_tx_ns = now;
-			TxFrame.flags = MOTION_FLAG_NONE;
+			TxFrame.flags = limiterActive ? MOTION_FLAG_LIMITER_ACTIVE : MOTION_FLAG_NONE;
 			motion_setpoint_finalize(&TxFrame);
 
 			sockaddr_in to;

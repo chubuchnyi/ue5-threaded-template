@@ -16,3 +16,5 @@ why it is acceptable for a training prototype.
 | `Plugins/MotionLink/.../MotionLinkSpawnSubsystem.cpp` | Auto-spawns the test actor from code instead of a hand-authored map | Keeps Stage 3 verifiable headless with no Content assets |
 | `Plugins/MotionLink/.../MotionWorker.cpp` | Const-accel observer, one-tap velocity trust + linear residual smear | CLAUDE asks for a minimal observer, not a full Kalman filter |
 | `Plugins/MotionLink/.../TelemetrySourceComponent.cpp` | Assumes a single producer component feeds the SPSC ring | Ring is strictly single-producer/single-consumer; multiple sources would need a merge |
+| `Plugins/MotionLink/.../MotionWorker.cpp` | Washout is one first-order HPF/LPF per channel group, not a full cueing algorithm | CLAUDE asks for a filter skeleton with one coefficient per channel, not real motion cueing |
+| `Plugins/MotionLink/.../MotionWorker.cpp` | Velocity/jerk limits share one value across all 6 channels | Skeleton limiter; per-axis actuator limits are out of scope for the prototype |
