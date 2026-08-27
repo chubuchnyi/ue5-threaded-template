@@ -26,8 +26,17 @@
 #include <stddef.h>
 
 // C++11 gives us static_assert and the fixed-width types above. Both MSVC and
-// the CMake toolchain compiler are well past this.
-#if defined(__cplusplus) && __cplusplus < 201103L
+// the CMake toolchain compiler are well past this. Note: MSVC reports
+// __cplusplus as 199711L unless /Zc:__cplusplus is passed, so consult
+// _MSVC_LANG there instead of the standard macro.
+#if defined(_MSVC_LANG)
+#  define MOTION_CPP_LANG _MSVC_LANG
+#elif defined(__cplusplus)
+#  define MOTION_CPP_LANG __cplusplus
+#else
+#  define MOTION_CPP_LANG 0L
+#endif
+#if MOTION_CPP_LANG < 201103L
 #  error "motion_protocol.h requires C++11 or newer"
 #endif
 

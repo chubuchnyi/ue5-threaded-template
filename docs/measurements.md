@@ -11,7 +11,10 @@ Nothing to measure yet; this stage produces a header only.
 - `static_assert` on both frame sizes passes: `SetpointFrame` = 72 B,
   `FeedbackFrame` = 60 B.
 - CRC32 known-answer test: `crc32("123456789") == 0xCBF43926` — passes.
-- MSVC compile: pending (verified when the UE plugin first builds, Stage 2).
+- MSVC compile: verified with cl.exe 19.44 (VS 2022 Build Tools),
+  `/std:c++20 /permissive- /W4 /WX` — clean, sizes 72/60, CRC + validate pass.
+  Required consulting `_MSVC_LANG` (MSVC reports `__cplusplus == 199711L`
+  without `/Zc:__cplusplus`).
 
 ## Stage 1 — controller_sim
 
