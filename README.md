@@ -206,7 +206,7 @@ Full list in [`docs/cvars.md`](docs/cvars.md) — e.g. `motion.Source`
 | 2 | UE plugin skeleton: 1 kHz worker → UDP | ✅ verified on device (stable 1000 Hz) |
 | 3 | SPSC ring + async physics tick + observer | ✅ verified (observer tracks the cube; smooth under FPS drop) |
 | 4 | Cueing skeleton + limiter | ✅ verified (washout + whole-vector limiter, live CVars) |
-| 5 | Measurements (Insights, jitter, latency) | ⬜ |
+| 5 | Measurements (Insights, jitter, latency) | ✅ trace + jitter/latency numbers captured |
 
 Measured results and the bugs each stage surfaced are in
 [`docs/measurements.md`](docs/measurements.md). Deliberate prototype

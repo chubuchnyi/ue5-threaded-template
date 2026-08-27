@@ -2,6 +2,9 @@
 
 #include "MotionLinkSubsystem.h"
 #include "TelemetryRing.h"
+#include "MotionTime.h"
+
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include "Components/PrimitiveComponent.h"
 #include "PhysicsEngine/BodyInstance.h"
@@ -80,6 +83,7 @@ void UTelemetrySourceComponent::EndPlay(const EEndPlayReason::Type EndPlayReason
 void UTelemetrySourceComponent::AsyncPhysicsTickComponent(float /*DeltaTime*/, float SimTime)
 {
 	// Physics thread. No UObject access here.
+	TRACE_CPUPROFILER_EVENT_SCOPE(MotionTelemetry_PhysTick);
 	if (!PhysHandle || !Ring)
 	{
 		return;
@@ -108,6 +112,7 @@ void UTelemetrySourceComponent::AsyncPhysicsTickComponent(float /*DeltaTime*/, f
 	// acceleration estimate would explode. SimTime advances a true fixed dt per
 	// substep regardless of when the burst executes.
 	s.t_phys_ns = (uint64_t)((double)SimTime * 1.0e9);
+	s.t_wall_ns = MotionNowNs(); // wall clock, for phys-tick -> send latency
 	s.pose[0] = (float)X.X * CmToM;
 	s.pose[1] = (float)X.Y * CmToM;
 	s.pose[2] = (float)X.Z * CmToM;

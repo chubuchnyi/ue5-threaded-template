@@ -134,3 +134,56 @@ Limiter (single whole-vector scale, no per-component clamp):
 
 Meets the done criterion: coefficients change from the console on the fly and
 the limiter's action is visible in the log.
+
+## Stage 5 — measurements
+
+Instrumentation:
+
+- `TRACE_CPUPROFILER_EVENT_SCOPE` on the physics tick (`MotionTelemetry_PhysTick`),
+  the worker tick (`MotionWorker_Tick`) and the send (`MotionWorker_Send`).
+- `TRACE_INT_VALUE` counters: `Motion/TickIntervalUs`, `Motion/RingDepth`,
+  `Motion/RttUs`, `Motion/SampleAgeUs`, `Motion/PipeLatencyUs`.
+- `motion.Stats 1` logs a measured line once per second (no Insights needed).
+- `tools/analyze_run.py` turns a controller CSV into interval/latency
+  histograms.
+
+Capture: `UnrealEditor-Cmd MotionProto.uproject -game -nullrhi
+-trace=cpu,frame,counters,bookmark -tracefile=motion.utrace
+-ExecCmds="motion.Stats 1"`, fed to `controller_sim --csv`. Produced a 44 MB
+`motion.utrace` (open in Unreal Insights — the three named scopes appear on the
+physics, MotionWorker and game threads).
+
+### Jitter (worker 1 kHz send cadence)
+
+From `motion.Stats` (worker histogram) and `analyze_run.py` (controller CSV),
+in agreement:
+
+| source | p50 | p99 | max |
+|--------|-----|-----|-----|
+| worker tick interval | ~1000 µs | ~1.5–2.0 ms | ~2.0–2.3 ms |
+| controller send interval | 998 µs | 2001 µs | 2271 µs |
+| controller arrival interval | 1000 µs | 2001 µs | 2032 µs |
+
+Rate holds at 1000 Hz, 0.000% loss (controller authority). The p99/max tail sits
+at ~2 ms — a single missed ~1 ms scheduler slot followed by catch-up — on an
+**untuned** desktop (core parking / C-states still on). See
+`docs/plots/send_interval.png`, `arrival_interval.png`.
+
+### Latency (physics tick → controller receipt) — estimate
+
+Two legs, measured separately because the UE and controller clocks share the
+QPC rate but not an epoch:
+
+- **phys-tick → worker-send** (measured inside UE, one clock,
+  `Motion/PipeLatencyUs`): ~0.2–0.9 ms (the sample waits in the ring for the
+  next 1 kHz worker tick after its 120 Hz async-physics burst).
+- **worker-send → controller-recv** (loopback hop, skew removed in
+  `analyze_run.py`): p50 297 µs, p99 506 µs, max 946 µs — bounded by the
+  controller's 2 kHz drain interval. See `docs/plots/transport_jitter.png`.
+
+**End-to-end estimate: ≈ 0.8 ms typical, up to ~1.9 ms** on this untuned host.
+RTT (UE-measured, includes the controller's poll): ~1.0 ms.
+
+_(Absolute cross-process latency is an estimate: without a clock-sync handshake
+only the hop's jitter floor is recoverable, so the send→recv leg is reported
+skew-removed and added to the precisely-measured UE leg.)_

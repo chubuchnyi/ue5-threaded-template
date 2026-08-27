@@ -4,6 +4,8 @@
 
 #include "HAL/RunnableThread.h"
 #include "HAL/PlatformAffinity.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+#include "ProfilingDebugging/CountersTrace.h"
 
 #include <cmath>
 
@@ -146,6 +148,7 @@ uint32 FMotionWorker::Run()
 		// else: behind schedule; fall through and run immediately to catch up.
 		if (bStop.load(std::memory_order_acquire)) { break; }
 
+		TRACE_CPUPROFILER_EVENT_SCOPE(MotionWorker_Tick);
 		const uint64 now = NowNs();
 
 		// --- tick-interval jitter bookkeeping ---
@@ -155,6 +158,7 @@ uint32 FMotionWorker::Run()
 		Hist[dtUs < (uint32)kHistBuckets ? dtUs : (kHistBuckets - 1)]++;
 		if (dtUs > maxUs) { maxUs = dtUs; }
 		++tickCount;
+		TRACE_INT_VALUE(TEXT("Motion/TickIntervalUs"), (int32)dtUs);
 
 		// --- read live controls (acquire) ---
 		const bool enabled = Controls->Enabled.load(std::memory_order_acquire) != 0;
@@ -211,6 +215,13 @@ uint32 FMotionWorker::Run()
 				for (int d = 0; d < MOTION_DOF; ++d) { LastMeasVel[d] = smp.vel[d]; }
 				LastMeasNs = smp.t_phys_ns;
 				LastConsumeWallNs = now;
+				// phys-tick -> now (worker consume/send) latency, one wall clock.
+				if (smp.t_wall_ns != 0 && now > smp.t_wall_ns)
+				{
+					const uint32 latUs = (uint32)((now - smp.t_wall_ns) / 1000);
+					Telemetry->PipeLatencyUs.store(latUs, std::memory_order_release);
+					TRACE_INT_VALUE(TEXT("Motion/PipeLatencyUs"), (int32)latUs);
+				}
 				HaveMeas = true;
 				got = true;
 			}
@@ -251,7 +262,11 @@ uint32 FMotionWorker::Run()
 			}
 			if (CorrTicks > 0) { --CorrTicks; }
 
-			Telemetry->RingDepth.store(Ring->ApproxDepth(), std::memory_order_release);
+			const uint32 depth = Ring->ApproxDepth();
+			Telemetry->RingDepth.store(depth, std::memory_order_release);
+			TRACE_INT_VALUE(TEXT("Motion/RingDepth"), (int32)depth);
+			TRACE_INT_VALUE(TEXT("Motion/SampleAgeUs"),
+				(int32)Telemetry->SampleAgeUs.load(std::memory_order_relaxed));
 		}
 
 		// --- Stage 4: cueing skeleton + limiter -------------------------------
@@ -333,6 +348,7 @@ uint32 FMotionWorker::Run()
 		// --- emit one setpoint ---
 		if (enabled)
 		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(MotionWorker_Send);
 			for (int d = 0; d < MOTION_DOF; ++d)
 			{
 				TxFrame.pose[d] = (float)outPose[d];
@@ -374,6 +390,7 @@ uint32 FMotionWorker::Run()
 			Telemetry->RttUs.store((uint32)(rtt / 1000), std::memory_order_release);
 			Telemetry->State.store(RxFrame.state, std::memory_order_release);
 			Telemetry->FeedbackSeq.store(RxFrame.seq, std::memory_order_release);
+			TRACE_INT_VALUE(TEXT("Motion/RttUs"), (int32)(rtt / 1000));
 		}
 
 		// --- publish stats once per second ---
@@ -382,16 +399,20 @@ uint32 FMotionWorker::Run()
 			Telemetry->TickHz.store(tickCount, std::memory_order_release);
 			Telemetry->JitterMaxUs.store(maxUs, std::memory_order_release);
 
-			// p99 from the histogram.
-			const uint32 threshold = (uint32)(0.99 * tickCount);
+			// p50 and p99 from the histogram in one scan.
+			const uint32 t50 = (uint32)(0.50 * tickCount);
+			const uint32 t99 = (uint32)(0.99 * tickCount);
 			uint32 cum = 0;
+			uint32 p50 = 0;
 			uint32 p99 = 0;
 			for (int b = 0; b < kHistBuckets; ++b)
 			{
 				cum += Hist[b];
-				if (p99 == 0 && cum >= threshold) { p99 = (uint32)b; }
+				if (p50 == 0 && cum >= t50) { p50 = (uint32)b; }
+				if (p99 == 0 && cum >= t99) { p99 = (uint32)b; }
 				Hist[b] = 0; // reset the window as we scan
 			}
+			Telemetry->JitterP50Us.store(p50, std::memory_order_release);
 			Telemetry->JitterP99Us.store(p99, std::memory_order_release);
 
 			tickCount = 0;

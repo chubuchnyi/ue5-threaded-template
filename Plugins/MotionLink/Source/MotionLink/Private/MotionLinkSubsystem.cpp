@@ -42,6 +42,10 @@ static TAutoConsoleVariable<int32> CVarOverlay(
 	TEXT("motion.Overlay"), 1,
 	TEXT("1: draw the on-screen debug overlay. Live."), ECVF_Default);
 
+static TAutoConsoleVariable<int32> CVarStats(
+	TEXT("motion.Stats"), 0,
+	TEXT("1: log a measured stats line (Hz/jitter/RTT/latency) once per second. Live."), ECVF_Default);
+
 static TAutoConsoleVariable<int32> CVarSource(
 	TEXT("motion.Source"), 1,
 	TEXT("Worker output source: 0 = synthetic sine, 1 = telemetry observer. Live."), ECVF_Default);
@@ -141,7 +145,7 @@ void UMotionLinkSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-bool UMotionLinkSubsystem::Tick(float /*DeltaSeconds*/)
+bool UMotionLinkSubsystem::Tick(float DeltaSeconds)
 {
 	check(IsInGameThread());
 
@@ -159,6 +163,29 @@ bool UMotionLinkSubsystem::Tick(float /*DeltaSeconds*/)
 	Controls.LimitRotMicroRad.store((uint32)FMath::Max(1.0f, CVarLimitRot.GetValueOnGameThread() * 1e6f), std::memory_order_release);
 	Controls.LimitVelMicro.store((uint32)FMath::Max(1.0f, CVarLimitVel.GetValueOnGameThread() * 1e6f), std::memory_order_release);
 	Controls.LimitJerkMilli.store((uint32)FMath::Max(1.0f, CVarLimitJerk.GetValueOnGameThread() * 1e3f), std::memory_order_release);
+
+	// Once-per-second measured stats line (for on-device numbers without the
+	// Insights GUI). Off by default; enable with `motion.Stats 1`.
+	if (CVarStats.GetValueOnGameThread() != 0)
+	{
+		static float StatsAccum = 0.0f;
+		StatsAccum += DeltaSeconds;
+		if (StatsAccum >= 1.0f)
+		{
+			StatsAccum = 0.0f;
+			UE_LOG(LogTemp, Log,
+				TEXT("MotionStats: %u Hz | jitter p50=%u p99=%u max=%u us | RTT=%u us | pipeLatency=%u us | ring=%u age=%u us | lim=%u"),
+				Telemetry.TickHz.load(std::memory_order_acquire),
+				Telemetry.JitterP50Us.load(std::memory_order_acquire),
+				Telemetry.JitterP99Us.load(std::memory_order_acquire),
+				Telemetry.JitterMaxUs.load(std::memory_order_acquire),
+				Telemetry.RttUs.load(std::memory_order_acquire),
+				Telemetry.PipeLatencyUs.load(std::memory_order_acquire),
+				Telemetry.RingDepth.load(std::memory_order_acquire),
+				Telemetry.SampleAgeUs.load(std::memory_order_acquire),
+				Telemetry.LimiterActive.load(std::memory_order_acquire));
+		}
+	}
 
 	// Read-only overlay.
 	if (CVarOverlay.GetValueOnGameThread() != 0 && GEngine)

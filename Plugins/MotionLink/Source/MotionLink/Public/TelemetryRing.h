@@ -20,7 +20,8 @@
 // cross the thread boundary, never a UObject.
 struct FTelemetrySample
 {
-	uint64_t t_phys_ns = 0;      // MotionNowNs() at the physics tick
+	uint64_t t_phys_ns = 0;      // solver SimTime, ns — for the observer's accel slope
+	uint64_t t_wall_ns = 0;      // MotionNowNs() at the physics tick — for latency
 	float    pose[6] = {0};      // x,y,z (m), roll,pitch,yaw (rad)
 	float    vel[6]  = {0};      // linear (m/s), angular (rad/s)
 };

@@ -21,6 +21,7 @@ struct FMotionLinkTelemetry
 {
 	std::atomic<uint32_t> Seq{0};          // last setpoint seq sent by worker
 	std::atomic<uint32_t> TickHz{0};       // measured worker rate over last 1 s
+	std::atomic<uint32_t> JitterP50Us{0};  // 50th pct tick interval, last 1 s
 	std::atomic<uint32_t> JitterP99Us{0};  // 99th pct tick interval, last 1 s
 	std::atomic<uint32_t> JitterMaxUs{0};  // max tick interval, last 1 s
 	std::atomic<uint32_t> RttUs{0};        // last feedback round trip, us
@@ -30,6 +31,7 @@ struct FMotionLinkTelemetry
 	std::atomic<uint32_t> RingDepth{0};    // telemetry ring occupancy (approx)
 	std::atomic<uint32_t> SampleAgeUs{0};  // age of last consumed sample, us
 	std::atomic<uint32_t> LimiterActive{0};// 1 if the limiter scaled this frame
+	std::atomic<uint32_t> PipeLatencyUs{0};// phys-tick -> worker-send latency, us
 };
 
 // Game thread -> worker. Live-tunable inputs sourced from motion.* CVars and

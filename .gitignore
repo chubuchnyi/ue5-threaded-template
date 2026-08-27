@@ -27,3 +27,6 @@ run*.csv
 
 # build/run logs
 *.log
+
+# Insights trace captures
+*.utrace
