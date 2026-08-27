@@ -187,3 +187,17 @@ RTT (UE-measured, includes the controller's poll): ~1.0 ms.
 _(Absolute cross-process latency is an estimate: without a clock-sync handshake
 only the hop's jitter floor is recoverable, so the send→recv leg is reported
 skew-removed and added to the precisely-measured UE leg.)_
+
+### Fault handling: UE process kill → watchdog
+
+Captured end-to-end by killing the live `UnrealEditor-Cmd` process mid-stream
+while `controller_sim` logged:
+
+- Stream ACTIVE at 1000 rx/s, then the process is killed.
+- Watchdog trips to `LIMITED` within 5 input periods (5 ms) of the last valid
+  frame, at the last commanded output (out0 = −0.230).
+- Linear ramp to neutral over **exactly 1001 control ticks ≈ 500 ms**, then
+  `PARK` at out0 = 0.000 — no discontinuity.
+- `rx = 0/s` afterward confirms the source is gone.
+
+Satisfies "killing the UE process triggers the watchdog and a ramp to neutral".
