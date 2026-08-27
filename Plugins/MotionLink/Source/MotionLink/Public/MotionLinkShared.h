@@ -27,6 +27,8 @@ struct FMotionLinkTelemetry
 	std::atomic<uint32_t> State{0};        // last MotionState from feedback
 	std::atomic<uint32_t> FeedbackSeq{0};  // last feedback seq observed
 	std::atomic<uint32_t> SendErrors{0};   // cumulative sendto failures
+	std::atomic<uint32_t> RingDepth{0};    // telemetry ring occupancy (approx)
+	std::atomic<uint32_t> SampleAgeUs{0};  // age of last consumed sample, us
 };
 
 // Game thread -> worker. Live-tunable inputs sourced from motion.* CVars and
@@ -37,4 +39,6 @@ struct FMotionLinkControls
 	std::atomic<uint32_t> Enabled{1};            // 0/1: emit setpoints
 	std::atomic<uint32_t> SineFreqMilliHz{500};  // sine frequency, mHz (0.5 Hz)
 	std::atomic<uint32_t> SineAmpMicroM{200000}; // sine amplitude, um (0.2 m)
+	std::atomic<uint32_t> SourceMode{1};         // 0: synthetic sine, 1: telemetry observer
+	std::atomic<uint32_t> CorrectMs{8};          // residual correction smear, ms
 };

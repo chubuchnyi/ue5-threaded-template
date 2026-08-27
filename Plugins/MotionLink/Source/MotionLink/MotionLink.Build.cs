@@ -14,6 +14,13 @@ public class MotionLink : ModuleRules
 			"Engine",
 		});
 
+		// Physics-thread telemetry read (FBodyInstance, Chaos particle handle).
+		PrivateDependencyModuleNames.AddRange(new string[]
+		{
+			"PhysicsCore",
+			"Chaos",
+		});
+
 		// shared/ holds the wire protocol header used verbatim by both this
 		// plugin and the standalone controller_sim. ModuleDirectory is
 		// .../Plugins/MotionLink/Source/MotionLink; four levels up is the repo

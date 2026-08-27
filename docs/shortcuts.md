@@ -12,3 +12,7 @@ why it is acceptable for a training prototype.
 | `Plugins/MotionLink/.../MotionWorker.cpp` | Raw Winsock UDP in the worker instead of UE's socket subsystem | Keeps the hot path POD-only and allocation-free; worker is Win64-only anyway |
 | `Plugins/MotionLink/.../MotionWorker.cpp` | Worker sends UDP synchronously (non-blocking socket) from the hot path | Arch puts UDP tx/rx in the worker; loopback sendto never blocks. Non-blocking guarantees no stall |
 | `Plugins/MotionLink/.../MotionWorker.cpp` | Synthetic sine, no real physics yet | Stage 2 proves the thread/timer/UDP path; real telemetry is Stage 3 |
+| `Plugins/MotionLink/.../MotionTestActor.cpp` | Servo-driven cube as the motion source, gains tuned soft for FPS-drop stability | It is test stimulus, not the product; only needs to produce bounded non-zero accelerations across frame rates |
+| `Plugins/MotionLink/.../MotionLinkSpawnSubsystem.cpp` | Auto-spawns the test actor from code instead of a hand-authored map | Keeps Stage 3 verifiable headless with no Content assets |
+| `Plugins/MotionLink/.../MotionWorker.cpp` | Const-accel observer, one-tap velocity trust + linear residual smear | CLAUDE asks for a minimal observer, not a full Kalman filter |
+| `Plugins/MotionLink/.../TelemetrySourceComponent.cpp` | Assumes a single producer component feeds the SPSC ring | Ring is strictly single-producer/single-consumer; multiple sources would need a merge |

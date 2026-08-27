@@ -72,3 +72,37 @@ re-arming the high-resolution waitable timer as a one-shot against an advancing
 absolute deadline each iteration (self-corrects drift). After the fix: solid
 1000 Hz as above. This is exactly the "measure, don't assume" point of the
 prototype.
+
+## Stage 3 — SPSC ring + async physics + observer
+
+Setup: async physics at a fixed 120 Hz substep; `UTelemetrySourceComponent`
+samples the Chaos body on the physics thread into the hand-written SPSC ring;
+the worker runs a const-accel observer at 1 kHz and streams to `controller_sim`.
+An auto-spawned `AMotionTestActor` (servo-driven cube) provides the motion.
+
+Full frame rate:
+
+- Observer output tracks the cube's Lissajous path: X ∈ [−0.253, 0.253] m,
+  Y ∈ [−0.286, 0.286] m, Z ∈ [0.955, 1.045] m (Z ≈ 1.0 = spawn height).
+- **1000 rx/s, 0.000% loss**, iat p50 = 1000 µs.
+- Ring: drop 0, depth ≈ 0 (consumer keeps up); samples flow at 120 Hz.
+
+Artificial FPS drop (`t.MaxFPS 20`) — the key criterion:
+
+- Output stays **bounded and smooth**: X ∈ [−0.222, 0.222] m, max step
+  0.00051 m per 1 kHz tick — no gaps or discontinuities. 999 rx/s, 0.000% loss.
+- The observer bridges the now-bursty 120 Hz telemetry (6 substeps land within
+  ~1 ms each 50 ms game frame) to a continuous 1 kHz output.
+
+### Two bugs found by the FPS-drop test
+
+1. **Observer blow-up (~1e9).** Samples were timestamped with wall-clock time.
+   Under the FPS drop the async substeps run in a burst, so wall-clock deltas
+   between samples collapse toward 0 and the velocity-slope acceleration
+   estimate exploded. Fix: timestamp with the solver's `SimTime` (true fixed dt
+   per substep) plus an acceleration sanity clamp.
+2. **Test-rig instability.** The stimulus cube's position servo (K = 500) went
+   unstable when its force was refreshed only at 20 Hz (force held stale for a
+   50 ms frame → overshoot → divergence). This was the *stimulus*, not the
+   pipeline. Fix: soften the servo (K = 60, critically damped) so it stays
+   stable across frame rates.

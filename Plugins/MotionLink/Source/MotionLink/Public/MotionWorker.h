@@ -8,6 +8,7 @@
 #include <cstdint>
 
 class FRunnableThread;
+class FTelemetryRing;
 
 // The 1 kHz motion loop, on its own TPri_TimeCritical thread pinned (optionally)
 // to a dedicated core.
@@ -26,6 +27,7 @@ public:
 	// the worker's lifetime. ControllerIp is host byte order.
 	FMotionWorker(FMotionLinkTelemetry* InTelemetry,
 	              FMotionLinkControls* InControls,
+	              FTelemetryRing* InRing,
 	              uint32 InControllerIp,
 	              uint16 InTxPort,
 	              uint16 InRxPort,
@@ -46,6 +48,7 @@ private:
 	// --- immutable config ---
 	FMotionLinkTelemetry* Telemetry = nullptr;
 	FMotionLinkControls*  Controls = nullptr;
+	FTelemetryRing*       Ring = nullptr; // consumer end; owned by the subsystem
 	uint32 ControllerIp = 0;
 	uint16 TxPort = 0;
 	uint16 RxPort = 0;
@@ -60,13 +63,25 @@ private:
 	uintptr_t TxSock = ~(uintptr_t)0; // INVALID_SOCKET
 	uintptr_t RxSock = ~(uintptr_t)0;
 	void*     TimerHandle = nullptr;  // HANDLE for the waitable timer
-	uint64    QpcFreq = 0;
 
 	// Preallocated wire buffers (no per-tick allocation).
 	SetpointFrame TxFrame;
 	FeedbackFrame RxFrame;
 
 	uint32 SeqCounter = 0;
+
+	// --- const-accel observer state (consumer side) ---
+	// Estimated state integrated at 1 kHz; corrected toward telemetry samples
+	// with the residual smeared over CorrectMs so the output never jumps.
+	double PoseHat[MOTION_DOF] = {0};
+	double VelHat[MOTION_DOF]  = {0};
+	double AccelHat[MOTION_DOF] = {0};
+	double LastMeasVel[MOTION_DOF] = {0};
+	double CorrPerTick[MOTION_DOF] = {0};
+	uint64 LastMeasNs = 0;          // sim-time of last sample (for accel slope)
+	uint64 LastConsumeWallNs = 0;   // wall-time a sample was last consumed (staleness)
+	bool   HaveMeas = false;
+	int    CorrTicks = 0;
 
 	// Tick-interval histogram in microseconds, one bucket per us. Cleared each
 	// 1 s stats window. Preallocated; no allocation on the hot path.

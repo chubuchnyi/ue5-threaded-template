@@ -1,4 +1,6 @@
 #include "MotionWorker.h"
+#include "TelemetryRing.h"
+#include "MotionTime.h"
 
 #include "HAL/RunnableThread.h"
 #include "HAL/PlatformAffinity.h"
@@ -27,12 +29,14 @@ static const double kTwoPi = 6.28318530717958647692;
 // ---------------------------------------------------------------------------
 FMotionWorker::FMotionWorker(FMotionLinkTelemetry* InTelemetry,
                              FMotionLinkControls* InControls,
+                             FTelemetryRing* InRing,
                              uint32 InControllerIp,
                              uint16 InTxPort,
                              uint16 InRxPort,
                              uint64 InAffinityMask)
 	: Telemetry(InTelemetry)
 	, Controls(InControls)
+	, Ring(InRing)
 	, ControllerIp(InControllerIp)
 	, TxPort(InTxPort)
 	, RxPort(InRxPort)
@@ -50,26 +54,15 @@ FMotionWorker::~FMotionWorker()
 
 uint64 FMotionWorker::NowNs() const
 {
-#if PLATFORM_WINDOWS
-	LARGE_INTEGER c;
-	QueryPerformanceCounter(&c);
-	const uint64 counts = (uint64)c.QuadPart;
-	const uint64 secs = counts / QpcFreq;
-	const uint64 rem  = counts % QpcFreq;
-	return secs * 1000000000ull + (rem * 1000000000ull) / QpcFreq;
-#else
-	return 0;
-#endif
+	// Shared process-wide clock so worker timestamps and the physics thread's
+	// sample timestamps (also MotionNowNs) share an epoch.
+	return MotionNowNs();
 }
 
 // ---------------------------------------------------------------------------
 bool FMotionWorker::Init()
 {
 #if PLATFORM_WINDOWS
-	LARGE_INTEGER f;
-	QueryPerformanceFrequency(&f);
-	QpcFreq = (uint64)f.QuadPart;
-
 	WSADATA wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
 	{
@@ -165,20 +158,110 @@ uint32 FMotionWorker::Run()
 
 		// --- read live controls (acquire) ---
 		const bool enabled = Controls->Enabled.load(std::memory_order_acquire) != 0;
+		const uint32 sourceMode = Controls->SourceMode.load(std::memory_order_acquire);
 		const double freq = Controls->SineFreqMilliHz.load(std::memory_order_acquire) / 1000.0;
 		const double amp  = Controls->SineAmpMicroM.load(std::memory_order_acquire) / 1000000.0;
+
+		// Integration step from the actual tick interval, clamped so a
+		// scheduling stall can't inject a huge position jump.
+		double dtSec = dtNs / 1e9;
+		if (dtSec > 0.010) { dtSec = 0.010; }
+		else if (dtSec <= 0.0) { dtSec = 0.001; }
+
+		double outPose[MOTION_DOF] = {0};
+		double outVel[MOTION_DOF]  = {0};
+
+		if (sourceMode == 0)
+		{
+			// --- synthetic sine (Stage 2 behaviour, kept for A/B testing) ---
+			const double t = (now - t0) / 1e9;
+			const double phase = kTwoPi * freq * t;
+			outPose[0] = amp * std::sin(phase);
+			outVel[0]  = amp * kTwoPi * freq * std::cos(phase);
+		}
+		else if (Ring)
+		{
+			// --- const-accel observer over telemetry samples ---
+			// Drain every queued sample; keep the newest as the correction
+			// target and update the acceleration estimate from the velocity
+			// slope between samples.
+			FTelemetrySample smp;
+			bool got = false;
+			while (Ring->Pop(smp))
+			{
+				if (HaveMeas)
+				{
+					// dt is a SIM-time delta (see the source component). Guard
+					// against a degenerate step and clamp the estimate so a bad
+					// sample can never launch the const-accel extrapolation.
+					const double dtm = (smp.t_phys_ns > LastMeasNs)
+						? (smp.t_phys_ns - LastMeasNs) / 1e9 : 0.0;
+					if (dtm > 1e-4)
+					{
+						const double kMaxAccel = 1.0e3; // m/s^2, sanity ceiling
+						for (int d = 0; d < MOTION_DOF; ++d)
+						{
+							double a = ((double)smp.vel[d] - LastMeasVel[d]) / dtm;
+							if (a >  kMaxAccel) a =  kMaxAccel;
+							if (a < -kMaxAccel) a = -kMaxAccel;
+							AccelHat[d] = a;
+						}
+					}
+				}
+				for (int d = 0; d < MOTION_DOF; ++d) { LastMeasVel[d] = smp.vel[d]; }
+				LastMeasNs = smp.t_phys_ns;
+				LastConsumeWallNs = now;
+				HaveMeas = true;
+				got = true;
+			}
+
+			if (got)
+			{
+				// Trust the measured velocity; smear the position residual over
+				// CorrectMs ticks so a late sample never snaps the output.
+				uint32 correctMs = Controls->CorrectMs.load(std::memory_order_acquire);
+				if (correctMs < 1) { correctMs = 1; }
+				CorrTicks = (int)correctMs; // ~1 tick per ms at 1 kHz
+				for (int d = 0; d < MOTION_DOF; ++d)
+				{
+					VelHat[d] = LastMeasVel[d];
+					const double resid = (double)smp.pose[d] - PoseHat[d];
+					CorrPerTick[d] = resid / CorrTicks;
+				}
+			}
+
+			// Staleness = wall time since a sample was last consumed. Grows
+			// during an FPS drop while the observer extrapolates.
+			if (LastConsumeWallNs != 0)
+			{
+				Telemetry->SampleAgeUs.store((uint32)((now - LastConsumeWallNs) / 1000),
+					std::memory_order_release);
+			}
+
+			// Integrate const-accel every tick (this is what keeps the output
+			// smooth when physics samples arrive late during an FPS drop), then
+			// apply one slice of the smeared correction.
+			for (int d = 0; d < MOTION_DOF; ++d)
+			{
+				VelHat[d]  += AccelHat[d] * dtSec;
+				PoseHat[d] += VelHat[d] * dtSec + 0.5 * AccelHat[d] * dtSec * dtSec;
+				if (CorrTicks > 0) { PoseHat[d] += CorrPerTick[d]; }
+				outPose[d] = PoseHat[d];
+				outVel[d]  = VelHat[d];
+			}
+			if (CorrTicks > 0) { --CorrTicks; }
+
+			Telemetry->RingDepth.store(Ring->ApproxDepth(), std::memory_order_release);
+		}
 
 		// --- emit one setpoint ---
 		if (enabled)
 		{
-			const double t = (now - t0) / 1e9;
-			const double phase = kTwoPi * freq * t;
-			const float s = (float)(amp * std::sin(phase));
-			const float v = (float)(amp * kTwoPi * freq * std::cos(phase));
-
-			for (int d = 0; d < MOTION_DOF; ++d) { TxFrame.pose[d] = 0.0f; TxFrame.vel[d] = 0.0f; }
-			TxFrame.pose[0] = s; // surge axis carries the synthetic sine
-			TxFrame.vel[0]  = v;
+			for (int d = 0; d < MOTION_DOF; ++d)
+			{
+				TxFrame.pose[d] = (float)outPose[d];
+				TxFrame.vel[d]  = (float)outVel[d];
+			}
 			TxFrame.seq = SeqCounter++;
 			TxFrame.t_tx_ns = now;
 			TxFrame.flags = MOTION_FLAG_NONE;

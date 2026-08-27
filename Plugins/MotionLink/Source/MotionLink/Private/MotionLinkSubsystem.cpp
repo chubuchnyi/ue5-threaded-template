@@ -1,5 +1,6 @@
 #include "MotionLinkSubsystem.h"
 #include "MotionWorker.h"
+#include "TelemetryRing.h"
 #include "motion_protocol.h"
 
 #include "Engine/Engine.h"
@@ -41,6 +42,14 @@ static TAutoConsoleVariable<int32> CVarOverlay(
 	TEXT("motion.Overlay"), 1,
 	TEXT("1: draw the on-screen debug overlay. Live."), ECVF_Default);
 
+static TAutoConsoleVariable<int32> CVarSource(
+	TEXT("motion.Source"), 1,
+	TEXT("Worker output source: 0 = synthetic sine, 1 = telemetry observer. Live."), ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarCorrectMs(
+	TEXT("motion.Obs.CorrectMs"), 8,
+	TEXT("Observer residual-correction smear time, ms. Live."), ECVF_Default);
+
 // Parse "a.b.c.d" into a host-order uint32. Returns loopback on failure.
 static uint32 ParseIpHostOrder(const FString& Ip)
 {
@@ -58,6 +67,11 @@ static uint32 ParseIpHostOrder(const FString& Ip)
 }
 
 // ---------------------------------------------------------------------------
+// Defaulted here (not in the header) so TUniquePtr<FTelemetryRing> sees the
+// complete type for its deleter.
+UMotionLinkSubsystem::UMotionLinkSubsystem() = default;
+UMotionLinkSubsystem::~UMotionLinkSubsystem() = default;
+
 void UMotionLinkSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -70,7 +84,11 @@ void UMotionLinkSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	const int32  Core = CVarCoreAffinity.GetValueOnGameThread();
 	const uint64 Mask = (Core >= 0) ? (1ull << Core) : 0ull;
 
-	Worker = new FMotionWorker(&Telemetry, &Controls, Ip, TxP, RxP, Mask);
+	// Create the SPSC ring before the worker so the consumer pointer is valid
+	// for the thread's whole lifetime.
+	Ring = MakeUnique<FTelemetryRing>();
+
+	Worker = new FMotionWorker(&Telemetry, &Controls, Ring.Get(), Ip, TxP, RxP, Mask);
 	Worker->StartThread();
 
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(
@@ -95,6 +113,7 @@ void UMotionLinkSubsystem::Deinitialize()
 		delete Worker;
 		Worker = nullptr;
 	}
+	Ring.Reset(); // safe now: consumer thread has joined
 
 	Super::Deinitialize();
 }
@@ -107,6 +126,8 @@ bool UMotionLinkSubsystem::Tick(float /*DeltaSeconds*/)
 	Controls.Enabled.store(CVarEnabled.GetValueOnGameThread() != 0 ? 1u : 0u, std::memory_order_release);
 	Controls.SineFreqMilliHz.store((uint32)(CVarSineFreq.GetValueOnGameThread() * 1000.0f), std::memory_order_release);
 	Controls.SineAmpMicroM.store((uint32)(CVarSineAmp.GetValueOnGameThread() * 1000000.0f), std::memory_order_release);
+	Controls.SourceMode.store((uint32)FMath::Max(0, CVarSource.GetValueOnGameThread()), std::memory_order_release);
+	Controls.CorrectMs.store((uint32)FMath::Max(1, CVarCorrectMs.GetValueOnGameThread()), std::memory_order_release);
 
 	// Read-only overlay.
 	if (CVarOverlay.GetValueOnGameThread() != 0 && GEngine)
@@ -117,16 +138,19 @@ bool UMotionLinkSubsystem::Tick(float /*DeltaSeconds*/)
 		const uint32 MaxUs = Telemetry.JitterMaxUs.load(std::memory_order_acquire);
 		const uint32 Rtt   = Telemetry.RttUs.load(std::memory_order_acquire);
 		const uint32 St    = Telemetry.State.load(std::memory_order_acquire);
-		const uint32 FbSeq = Telemetry.FeedbackSeq.load(std::memory_order_acquire);
 		const uint32 Errs  = Telemetry.SendErrors.load(std::memory_order_acquire);
+		const uint32 Depth = Telemetry.RingDepth.load(std::memory_order_acquire);
+		const uint32 AgeUs = Telemetry.SampleAgeUs.load(std::memory_order_acquire);
+		const uint32 Src   = Controls.SourceMode.load(std::memory_order_acquire);
 
 		static const TCHAR* StateNames[] = { TEXT("INIT"), TEXT("ACTIVE"), TEXT("LIMITED"), TEXT("PARK"), TEXT("FAULT") };
 		const TCHAR* StateStr = StateNames[St <= MOTION_STATE_FAULT ? St : 0];
 
 		const FColor Color = (Hz >= 990 && Hz <= 1010) ? FColor::Green : FColor::Yellow;
 		const FString Line = FString::Printf(
-			TEXT("MotionLink  %4u Hz  jitter p99=%u us max=%u us  seq=%u  RTT=%u us  fb_seq=%u  state=%s  tx_err=%u"),
-			Hz, P99, MaxUs, Seq, Rtt, FbSeq, StateStr, Errs);
+			TEXT("MotionLink  %4u Hz  jitter p99=%u us max=%u us  seq=%u  RTT=%u us  state=%s  src=%s ring=%u age=%u us  tx_err=%u"),
+			Hz, P99, MaxUs, Seq, Rtt, StateStr,
+			Src == 0 ? TEXT("sine") : TEXT("obs"), Depth, AgeUs, Errs);
 
 		// Stable key so the line updates in place instead of stacking.
 		GEngine->AddOnScreenDebugMessage(/*Key*/ 0x4D4C /*'ML'*/, 1.5f, Color, Line);
