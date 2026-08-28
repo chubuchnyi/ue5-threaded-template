@@ -201,3 +201,13 @@ while `controller_sim` logged:
 - `rx = 0/s` afterward confirms the source is gone.
 
 Satisfies "killing the UE process triggers the watchdog and a ramp to neutral".
+
+## Toolchain note
+
+After Visual Studio 2022 Community (with the "Game development with C++"
+workload) was installed alongside the Build Tools, a **clean rebuild** of
+`MotionProtoEditor` (Intermediate/Binaries deleted first) succeeded: both
+modules recompiled and linked in 66.7 s. UBT resolved the shared MSVC toolset
+**14.44.35207 (cl 19.44.35228)** with the Windows 10.0.22621.0 SDK — the same
+toolset ships to both the Build Tools and Community instances, so the produced
+binaries are identical regardless of which instance UBT selects.

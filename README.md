@@ -53,8 +53,12 @@ MotionProto.uproject
 
 - Windows 10/11
 - Unreal Engine 5.7
-- Visual Studio 2022 with the MSVC v143 C++ toolchain (14.44 verified) — the
-  "Game development with C++" workload
+- Visual Studio 2022 with the MSVC v143 C++ toolchain (14.44.35207 /
+  cl 19.44.35228 verified) — the "Game development with C++" workload. Optional:
+  the "IDE support for Unreal Engine" component
+  (`Microsoft.VisualStudio.Component.Unreal`) for extra UE integration; core
+  `FString`/`TArray` debugger visualizers already come from the engine's
+  `UE.natvis`.
 - CMake 3.16+ (for `controller_sim`; MinGW g++ or MSVC both work)
 
 ## Step by step: build, debug, test
